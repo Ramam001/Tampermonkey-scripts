@@ -2,7 +2,7 @@
 // @name         Instagram Profile Media Filter (Reels/Photos)
 // @namespace    http://tampermonkey.net/
 // @version      1.1
-// @description  Adds a floating menu to filter out Reels and Photos on Instagram profiles.
+// @description  Adds a floating menu to filter out Reels and Photos on Instagram profiles at bottom right.
 // @author       You
 // @match        *://*.instagram.com/*
 // @grant        none
