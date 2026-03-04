@@ -1,0 +1,190 @@
+// ==UserScript==
+// @name         Instagram Profile Media Filter (Reels/Photos)
+// @namespace    http://tampermonkey.net/
+// @version      1.1
+// @description  Adds a floating menu to filter out Reels and Photos on Instagram profiles.
+// @author       You
+// @match        *://*.instagram.com/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // State variables to keep track of what is hidden
+    let hideReels = false;
+    let hidePhotos = false;
+    let filterTimeout = null; // Prevents scroll lag via debouncing
+
+    // Inject CSS for Dark Mode and styling
+    const style = document.createElement('style');
+    style.textContent = `
+        #custom-media-filter-ui {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: #ffffff;
+            border: 1px solid #dbdbdb;
+            padding: 12px;
+            z-index: 99999;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            color: #262626;
+        }
+        #custom-media-filter-ui.hidden {
+            display: none !important;
+        }
+        #custom-media-filter-title {
+            font-weight: bold;
+            border-bottom: 1px solid #dbdbdb;
+            padding-bottom: 4px;
+            margin-bottom: 4px;
+        }
+        /* Dark Mode Support */
+        @media (prefers-color-scheme: dark) {
+            #custom-media-filter-ui {
+                background: #262626;
+                border-color: #363636;
+                color: #f5f5f5;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            }
+            #custom-media-filter-title {
+                border-bottom-color: #363636;
+            }
+        }
+    `;
+    document.head.appendChild(style);
+
+    // Helper to check if user is on a profile page
+    function isProfilePage() {
+        const p = window.location.pathname;
+        // Exclude home, explore, reels, messages, single posts, etc.
+        return p.length > 1 && !p.startsWith('/explore/') && !p.startsWith('/direct/') && !p.startsWith('/reels/') && !p.startsWith('/stories/') && !p.startsWith('/p/');
+    }
+
+    // Create the floating UI panel
+    function createUI() {
+        let container = document.getElementById('custom-media-filter-ui');
+
+        // Hide menu if not on a profile page
+        if (!isProfilePage()) {
+            if (container) container.classList.add('hidden');
+            return;
+        }
+
+        // Show menu if it exists and we are on a profile page
+        if (container) {
+            container.classList.remove('hidden');
+            return;
+        }
+
+        container = document.createElement('div');
+        container.id = 'custom-media-filter-ui';
+
+        const title = document.createElement('div');
+        title.id = 'custom-media-filter-title';
+        title.innerText = 'Filter Profile';
+
+        // Reels Checkbox
+        const reelsLabel = document.createElement('label');
+        reelsLabel.style.cursor = 'pointer';
+        reelsLabel.innerHTML = `<input type="checkbox" id="filter-reels" style="margin-right: 6px;"> Hide Reels`;
+        reelsLabel.querySelector('input').addEventListener('change', (e) => {
+            hideReels = e.target.checked;
+            applyFilter();
+        });
+
+        // Photos Checkbox
+        const photosLabel = document.createElement('label');
+        photosLabel.style.cursor = 'pointer';
+        photosLabel.innerHTML = `<input type="checkbox" id="filter-photos" style="margin-right: 6px;"> Hide Photos`;
+        photosLabel.querySelector('input').addEventListener('change', (e) => {
+            hidePhotos = e.target.checked;
+            applyFilter();
+        });
+
+        container.appendChild(title);
+        container.appendChild(reelsLabel);
+        container.appendChild(photosLabel);
+        document.body.appendChild(container);
+    }
+
+    // Function to search the page and hide/show elements
+    function applyFilter() {
+        if (!isProfilePage()) return;
+
+        // Target links within the main element to avoid accidentally catching sidebar navigation
+        const links = document.querySelectorAll('main a[href*="/p/"], main a[href*="/reel/"]');
+
+        links.forEach(link => {
+            let isReel = link.href.includes('/reel/');
+
+            // Look for any elements inside the link (SVGs, spans) that have ARIA labels indicating a video
+            const labelledElements = link.querySelectorAll('[aria-label]');
+            labelledElements.forEach(el => {
+                const label = el.getAttribute('aria-label').toLowerCase();
+                if (label.includes('reel') || label.includes('clip') || label.includes('video')) {
+                    isReel = true;
+                }
+            });
+
+            // If it's a Reel, we make sure it isn't also flagged as a Photo
+            const isPhoto = link.href.includes('/p/') && !isReel;
+
+            // Dynamically find the grid cell wrapper.
+            // We climb up the DOM until we hit a container holding multiple posts (like a grid row),
+            // or until a maximum depth of 6 to prevent hiding the whole page by accident.
+            let wrapper = link;
+            let depth = 0;
+
+            while (wrapper.parentElement && depth < 6) {
+                const parent = wrapper.parentElement;
+
+                // Stop if we hit a main layout container
+                if (parent.tagName === 'ARTICLE' || parent.tagName === 'MAIN') {
+                    break;
+                }
+
+                // If this parent contains more than 1 post link, it's a row/grid container.
+                // We stop here so we only hide the single child wrapper!
+                const postsInParent = parent.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]').length;
+                if (postsInParent > 1) {
+                    break;
+                }
+
+                wrapper = parent;
+                depth++;
+            }
+
+            // Apply visibility based on user selection
+            if (wrapper) {
+                if ((isReel && hideReels) || (isPhoto && hidePhotos)) {
+                    wrapper.style.display = 'none';
+                } else {
+                    wrapper.style.display = ''; // Restore
+                }
+            }
+        });
+    }
+
+    // Initialize
+    createUI();
+    applyFilter();
+
+    // MutationObserver with Debouncing to catch dynamically loaded content while scrolling
+    const observer = new MutationObserver((mutations) => {
+        clearTimeout(filterTimeout);
+        filterTimeout = setTimeout(() => {
+            createUI(); // Checks page and toggles visibility
+            applyFilter(); // Applies filter logic if on profile
+        }, 150); // 150ms delay prevents lag
+    });
+
+    // Start observing the body for changes
+    observer.observe(document.body, { childList: true, subtree: true });
+
+})();
